@@ -14,28 +14,23 @@ library(geosphere)
 library(tidyverse)
 library(slider)
 ```
-Load in file
-```{r}
-# Herd assigned data
-# This data includes the herd and the associated fence interaction being examined. 
-wd_NMC <- paste0(dirname(path.expand('~')),"/Box/1.Ruyle_lab/1.Project_Data/Virtual Fencing/GPSData/FenceInteractions/");(files_NMC<-list.files(wd_NMC,full.names = T))
 
-# Raw Vence GPS data
-wd_NMC <- paste0(dirname(path.expand('~')),"/PycharmProjects/Vence-API/data");(files_NMC<-list.files(wd_NMC,full.names = T))
-NMC_uncleaned <- read.csv(files_NMC[1]);NMC_uncleaned$date <- lubridate::ymd_hms(NMC_uncleaned$date)
-```
-
-Data Pre-wrangle
+Load in data and Data Pre-wrangle
+  -   Assume the use of pycharm for running the Vence-API. This link can be changed to the "Data" folder in the repository if API is run with reticulate
 ```{r}
 wd <- paste0(dirname(path.expand('~')),"/PycharmProjects/Vence-API/data");(files<-list.files(wd,full.names = T))
-sampdata <- read.csv(files[1]) # hard coded for the large herd file of interest
+sampdata <- read.csv(files[1]) 
 sampdata <-sampdata[
   order( sampdata[,4], sampdata[,3] ),
-] %>% select(-X,-uuid);sampdata$date<- lubridate::ymd_hms(sampdata$date)
+] %>% select(-uuid);sampdata$date<- lubridate::ymd_hms(sampdata$date)
+```
 
+Load in collar meta data with associated herd, eartag, or additional information
+```{r}
+# Select a collar export associated with the appropriate herd. Match the collar export with the specific time period you're intersted in. Exports can be retrieved through the Herd Manager app. Exports should be collected prior to time period of interest. 
 file;(Metafiles <-list.files(paste0(dirname(path.expand('~')),"/Box/1.Ruyle_lab/1.Project_Data/Virtual Fencing/CollarManagment/RAWCollarHerd_Exports/"),full.names = T))
-# Meta<- read_csv(Metafiles[12]) %>% select("collar" = DeviceEUI,EarTag,HerdName)
-Meta<- read_csv(Metafiles[1]) %>% select("collar" = DeviceEUI,EarTag,HerdName) #%>% mutate(HerdName = "Small Herd") # hard coded for the large herd file of interest
+
+Meta<- read_csv(Metafiles[1]) %>% select("collar" = DeviceEUI,EarTag,HerdName) %>% mutate(HerdName = "Small Herd") # hard coded for the large herd file of interest
 
 
 NMC_uncleaned <- sampdata %>% left_join(Meta, by = "collar") %>% drop_na(HerdName)
@@ -85,32 +80,24 @@ NMC_uncleaned <- data.table::rbindlist(NMC_listed)
 
 Step 2:  rowSum collars within a known area
 ```{r}
- count_return <- function(long, lat, dist) {
+# Function to sum the number of collars within a desired error range
+count_return <- function(long, lat, dist) {
   clonglat <- cbind(long,lat)
 count <- rowSums(distm(clonglat[1,],clonglat, 
        fun = distHaversine)<= dist) # Average max quantile distance for 8 collars in varying canopy densities was 23m
 return(count)
  }
 
-test1 <-NMC_uncleaned %>% group_by(collar) %>% mutate(ErrorGPS = slide2_dbl(.x = longitude,.y = latitude, ~count_return(.x,.y,10),.after =48))
-test2 <-NMC_uncleaned %>% group_by(collar) %>% mutate(ErrorGPS = slide2_dbl(.x = longitude,.y = latitude, ~count_return(.x,.y,11),.after =48))
-test3 <-NMC_uncleaned %>% group_by(collar) %>% mutate(ErrorGPS = slide2_dbl(.x = longitude,.y = latitude, ~count_return(.x,.y,12),.after =48))
-test4 <-NMC_uncleaned %>% group_by(collar) %>% mutate(ErrorGPS = slide2_dbl(.x = longitude,.y = latitude, ~count_return(.x,.y,13),.after =48))
-test1_1 <-NMC_uncleaned %>% group_by(collar) %>% mutate(ErrorGPS = slide2_dbl(.x = longitude,.y = latitude, ~count_return(.x,.y,14),.after =48))
-test2_1 <-NMC_uncleaned %>% group_by(collar) %>% mutate(ErrorGPS = slide2_dbl(.x = longitude,.y = latitude, ~count_return(.x,.y,15),.after =48))#
-test3_1 <-NMC_uncleaned %>% group_by(collar) %>% mutate(ErrorGPS = slide2_dbl(.x = longitude,.y = latitude, ~count_return(.x,.y,16),.after =48))
-test4_1 <-NMC_uncleaned %>% group_by(collar) %>% mutate(ErrorGPS = slide2_dbl(.x = longitude,.y = latitude, ~count_return(.x,.y,17),.after =48))
-hist(test1$ErrorGPS,breaks = 50);hist(test2$ErrorGPS,breaks = 50);hist(test3$ErrorGPS,breaks = 50);hist(test4$ErrorGPS,breaks = 50);hist(test1_1$ErrorGPS,breaks = 50);hist(test2_1$ErrorGPS,breaks = 50);hist(test3_1$ErrorGPS,breaks = 50);hist(test4_1$ErrorGPS,breaks = 50)
+# Distance in this case is set to 20 meters and 
+test <-NMC_uncleaned %>% group_by(collar) %>% mutate(ErrorGPS = slide2_dbl(.x = longitude,.y = latitude, ~count_return(.x,.y,20),.after =48))
 
-
-# Identify 10 consecutive points with total median counts exceeding 19
+# Function to identify 10 consecutive points with total median counts exceeding 19 and mark them in a new column as 1 (Dropped collar), 0 (No dropped)
 DC_screen <- function(Median) {
-count <- ifelse(sum(Median >= 34)>=10,1,0)
+count <- ifelse(sum(Median >= 19)>=10,1,0)
 return(count)
  }
 
 # Comparing the removed collars between counts
-testlist <- list(test1,test2,test2,test4,test1_1,test2_1,test3_1,test4_1)
 for (l in 1:length(testlist)) {
   testlist[[l]] <- testlist[[l]]%>% group_by(collar) %>% mutate(Median = slide_dbl(ErrorGPS,~median(.x),.before=5, .after = 5))%>% mutate(DCScreen = slide_dbl(ErrorGPS,~DC_screen(.x), .after = 10))%>% group_by(collar,DCScreen) %>% mutate(Start = row_number()==1) %>% group_by(collar)%>% mutate(Final=case_when(Start & DCScreen==0~0,Start & DCScreen==1~1))%>% group_by(EarTag) %>% fill(Final,.direction = "down") 
 }
